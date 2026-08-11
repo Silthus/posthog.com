@@ -112,9 +112,10 @@ Notes:
   properties are stripped entirely, flag or no flag.
 - Truncation is skipped together with media passthrough because a cut through
   base64 corrupts the media as surely as redacting it.
-- Base64 strings shorter than 200 characters in media fields are kept even
-  when redacting.
-- The OpenTelemetry export path always redacts, regardless of this flag.
+- Very short base64 strings in media fields are kept even when redacting
+  (under 200 characters in Python, under 64 in Node).
+- In Node, the OpenTelemetry export path always redacts, regardless of this
+  flag.
 
 ## Delivery and failure semantics
 
