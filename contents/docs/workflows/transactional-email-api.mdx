@@ -575,7 +575,7 @@ curl -X PATCH "<ph_app_host>/api/projects/:project_id/messaging_templates/:id/" 
   -d '{ "managed_by": "gui" }'
 ```
 
-The template keeps its key. The next upload under that key without `if_code_managed` manages it in code again. The SDKs' automatic upload sets `if_code_managed`, so it doesn't take the template back: a send of a local template under that key fails with [`template_edited_in_posthog`](#template_edited_in_posthog).
+The template keeps its key. The next upload under that key without `if_code_managed` manages it in code again. The SDKs' automatic upload sets `if_code_managed`, so it doesn't take the template back. A send whose content PostHog still holds keeps working. A send that needs an upload, because your content changed, fails with [`template_edited_in_posthog`](#template_edited_in_posthog).
 
 The lock covers the template only. Its linked workflow stays editable.
 
@@ -679,7 +679,7 @@ curl -X PATCH "<ph_app_host>/api/projects/:project_id/messaging_templates/:id/" 
 - A key is set once. A template that has a key keeps it.
 - PostHog never matches a template by its name. An upload under an unknown key always creates a new template.
 
-To claim the template, [upload](#upload-a-template-by-key) your content under that key once, without `if_code_managed`. The upload publishes your content and marks the template as managed by code. After that, the SDKs send it as a [local template](#send-a-local-template). Before the upload, a send of a local template under that key fails with [`template_edited_in_posthog`](#template_edited_in_posthog), because the SDKs' automatic upload never claims a template that people edit in PostHog.
+To claim the template, [upload](#upload-a-template-by-key) your content under that key once, without `if_code_managed`. The upload publishes your content and marks the template as managed by code. After that, the SDKs send it as a [local template](#send-a-local-template). Before that, a local template send under that key whose content differs from the template's needs an upload. It fails with [`template_edited_in_posthog`](#template_edited_in_posthog), because the SDKs' automatic upload never claims a template that people edit in PostHog.
 
 When you delete a template, its key is free again. The next upload under that key creates a new template.
 
