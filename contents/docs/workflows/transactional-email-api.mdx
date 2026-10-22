@@ -299,7 +299,7 @@ When a job runner, such as a queue worker, already retries the job that sends, t
 <MultiLanguage>
 
 ```js
-await posthog.emails.send({
+const { error } = await posthog.emails.send({
     to: user.email,
     distinctId: user.id,
     templateKey: 'welcome',
@@ -309,6 +309,11 @@ await posthog.emails.send({
     idempotencyKey: `welcome:${user.id}`,
     maxRetries: 0,
 })
+
+if (error) {
+    // Fail the job, so the job runner retries it with the same key
+    throw new Error(`${error.code}: ${error.message}`)
+}
 ```
 
 ```python
@@ -327,6 +332,8 @@ posthog.emails.send(
 </MultiLanguage>
 
 A UUID that the SDK makes is new for each run of the job, so a job retry would send a second email. A key like `welcome:user_123` stays the same in every run.
+
+Node.js returns the error instead of throwing it, so throw it yourself to fail the job. In Python, `send` raises an `EmailError`. Retry only what the SDKs would retry, listed in [what the SDKs retry](#what-the-sdks-retry). Any other error gets the same answer on every run, so stop the job and fix the call.
 
 ### What a key promises
 
@@ -414,7 +421,7 @@ curl -X POST "<ph_app_host>/api/projects/@current/messaging/send/email/" \
   }'
 ```
 
-A local template goes by its key and its [content hash](#content-hash) in `template`, with `message_data`. When PostHog answers [`template_outdated`](#template_outdated), [upload the template](#upload-a-template-by-key), then send again with the same `Idempotency-Key`:
+A local template goes by its key and its [content hash](#content-hash) in `template`, with `message_data`. When PostHog answers [`template_outdated`](#template_outdated), [upload the template](#upload-a-template-by-key), then send again with the same `Idempotency-Key`. The hash must describe the content that you upload: the upload response returns it as `content_hash`. This example sends the template of the [upload example](#upload-a-template-by-key):
 
 ```bash
 curl -X POST "<ph_app_host>/api/projects/@current/messaging/send/email/" \
@@ -422,7 +429,7 @@ curl -X POST "<ph_app_host>/api/projects/@current/messaging/send/email/" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: welcome:user_42" \
   -d '{
-    "template": { "key": "welcome", "hash": "v1:f74cd913f3aa2e5667a588f2865634e56693df77793ca594d18e9b5f89e3d2e6" },
+    "template": { "key": "welcome", "hash": "v1:67bd514eca757ac54081c4eda9ca9cc9d3704594f0d83843a76a77364a2c6a12" },
     "to": "jane@example.com",
     "identifiers": { "distinct_id": "user_42" },
     "message_data": { "first_name": "Jane" }
@@ -568,7 +575,7 @@ curl -X PATCH "<ph_app_host>/api/projects/:project_id/messaging_templates/:id/" 
   -d '{ "managed_by": "gui" }'
 ```
 
-The template keeps its key. The next upload under that key manages it in code again.
+The template keeps its key. The next upload under that key without `if_code_managed` manages it in code again. The SDKs' automatic upload sets `if_code_managed`, so it doesn't take the template back: a send of a local template under that key fails with [`template_edited_in_posthog`](#template_edited_in_posthog).
 
 The lock covers the template only. Its linked workflow stays editable.
 
@@ -672,7 +679,7 @@ curl -X PATCH "<ph_app_host>/api/projects/:project_id/messaging_templates/:id/" 
 - A key is set once. A template that has a key keeps it.
 - PostHog never matches a template by its name. An upload under an unknown key always creates a new template.
 
-The next upload under that key claims the template: it publishes the uploaded content and marks the template as managed by code.
+To claim the template, [upload](#upload-a-template-by-key) your content under that key once, without `if_code_managed`. The upload publishes your content and marks the template as managed by code. After that, the SDKs send it as a [local template](#send-a-local-template). Before the upload, a send of a local template under that key fails with [`template_edited_in_posthog`](#template_edited_in_posthog), because the SDKs' automatic upload never claims a template that people edit in PostHog.
 
 When you delete a template, its key is free again. The next upload under that key creates a new template.
 
