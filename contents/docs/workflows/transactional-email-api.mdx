@@ -221,7 +221,7 @@ Your code is the source of truth. On every send, the SDK computes the template's
 
 So you don't need an upload step or a deploy step: the first send of a changed template publishes the change. The uploaded template is [managed by code](#templates-managed-by-code), so nobody can edit it in PostHog.
 
-The SDK's upload refuses to overwrite a template that people edit in PostHog. When the key names such a template, the send fails with [`template_edited_in_posthog`](#template_edited_in_posthog) and sends nothing.
+The SDK's upload refuses to overwrite a template that people edit in PostHog. When the key names such a template, a send that needs an upload fails with [`template_edited_in_posthog`](#template_edited_in_posthog) and sends nothing.
 
 #### Rolling deploys
 
@@ -679,7 +679,7 @@ curl -X PATCH "<ph_app_host>/api/projects/:project_id/messaging_templates/:id/" 
 - A key is set once. A template that has a key keeps it.
 - PostHog never matches a template by its name. An upload under an unknown key always creates a new template.
 
-To claim the template, [upload](#upload-a-template-by-key) your content under that key once, without `if_code_managed`. The upload publishes your content and marks the template as managed by code. After that, the SDKs send it as a [local template](#send-a-local-template). Before that, a local template send under that key whose content differs from the template's needs an upload. It fails with [`template_edited_in_posthog`](#template_edited_in_posthog), because the SDKs' automatic upload never claims a template that people edit in PostHog.
+To claim the template, [upload](#upload-a-template-by-key) your content under that key once, without `if_code_managed`. The upload publishes your content and marks the template as managed by code. After that, the SDKs send it as a [local template](#send-a-local-template). Before that, a local template send under that key works only when PostHog holds its content. The current content goes out as it is. Content from one of the last 100 publishes goes out as the current content, with a [`template_superseded`](#template_superseded) warning. Content that PostHog never published needs an upload, so the send fails with [`template_edited_in_posthog`](#template_edited_in_posthog): the SDKs' automatic upload never claims a template that people edit in PostHog.
 
 When you delete a template, its key is free again. The next upload under that key creates a new template.
 
