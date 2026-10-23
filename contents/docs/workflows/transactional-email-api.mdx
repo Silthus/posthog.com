@@ -28,10 +28,10 @@ A send can't mix the two forms. Pass `template_id`, or `template_key` with the c
 ## Before you start
 
 1. **Verify a sender.** [Set up the email channel](/docs/workflows/configure-channels) with a domain that you own, and make the verified sender your project's default sender: click **Make default** next to the sender in the email channel settings. An email from your code goes out from the default sender unless the send sets `from`.
-2. **Create a project secret API key.** Create a [project secret API key](/docs/api/project-secret-api-keys) (it starts with `phs_`) with the `hog_flow:write` scope. Keep it on your server, for example in the `POSTHOG_PROJECT_SECRET_API_KEY` environment variable. Never put it in browser or mobile code.
+2. **Create a project secret API key.** Create a [project secret API key](/docs/api/project-secret-api-keys) (it starts with `phs_`) with the `hog_flow:write` scope, which also lets it [read an email's status](#read-an-emails-status). Keep it on your server, for example in the `POSTHOG_PROJECT_SECRET_API_KEY` environment variable. Never put it in browser or mobile code.
 3. **Ask for access.** The API must be enabled for your project. See the beta note above.
 
-A project secret API key can only upload templates and send them. It can't read, edit, or delete templates. To call the other template routes, such as [adoption](#adopt-a-template-made-in-posthog), use a [personal API key](/docs/api/personal-api-keys) with `hog_flow:write`. A [change request](#run-with-posthog-code) needs `hog_flow:read` and `task:write` instead.
+A project secret API key can only upload templates, send them, and read the status of an email. It can't read, edit, or delete templates. To call the other template routes, such as [adoption](#adopt-a-template-made-in-posthog), use a [personal API key](/docs/api/personal-api-keys) with `hog_flow:write`. A [change request](#run-with-posthog-code) needs `hog_flow:read` and `task:write` instead.
 
 Project secret API keys are in beta and may not be available in your organization yet. Until they are, the upload and send routes also accept a personal API key with `hog_flow:write` and editor access to Workflows. With a personal API key, put the project ID in the URL instead of `@current`. The SDKs always call `@current`, so use them with a project secret API key.
 
@@ -143,12 +143,13 @@ result = posthog.emails.send(
     template_key='password-reset',
     subject='Reset your password',
     html=f'<p>Hi Jane,</p><p><a href="{reset_url}">Reset your password</a>. The link works for one hour.</p>',
+    from_='Hedgebox <security@example.com>',
 )
 ```
 
 </MultiLanguage>
 
-When you send `html` without `text`, PostHog derives the plain-text part from the HTML, so every email has a text version.
+When you send `html` without `text`, PostHog derives the plain-text part from the HTML. When the HTML has no text to derive, such as an email that is only an image, the email goes out without a plain-text part.
 
 ### Send a React Email component
 
@@ -242,10 +243,61 @@ To publish content that newer content replaced, such as when you roll back a rel
 
 | Node.js | Python | Description |
 | --- | --- | --- |
-| `from` | `from` | The sender, as `security@example.com` or `Hedgebox <security@example.com>`, on a domain that the project verified. Without it, rendered content goes out from the project's default sender, and a local template from its template's sender. A sender that the project can't use fails with [`sender_not_verified`](#sender_not_verified). |
+| `from` | `from_` | The sender, as `security@example.com` or `Hedgebox <security@example.com>`, on a domain that the project verified. Without it, rendered content goes out from the project's default sender, and a local template from its template's sender. A sender that no verified sender of the project can send from fails with [`sender_not_allowed`](#sender_not_allowed). Without `from` and without a default sender, the send fails with [`sender_not_verified`](#sender_not_verified). |
 | `replyTo` | `reply_to` | One address, or a list of up to 10 addresses, that replies go to. |
 
-`from` and `reply_to` only go with `template_key`. A template made in PostHog uses its own sender.
+Python names the sender `from_`, because `from` is a Python keyword. `from` and `reply_to` only go with `template_key`. A template made in PostHog uses its own sender.
+
+### Add copies, headers, tags, and attachments
+
+An email from your code can carry copies, custom headers, tags, and files. Rendered content and local templates take them both:
+
+<MultiLanguage>
+
+```js
+const { data, error } = await posthog.emails.send({
+    to: 'jane@example.com',
+    distinctId: user.id,
+    templateKey: 'order-receipt',
+    subject: 'Your Hedgebox receipt',
+    html: receiptHtml,
+    bcc: 'records@example.com',
+    headers: { 'X-Entity-Ref-ID': 'order-123' },
+    tags: [{ name: 'category', value: 'receipt' }],
+    attachments: [{ filename: 'receipt.pdf', content: receiptPdf, contentType: 'application/pdf' }],
+})
+```
+
+```python
+result = posthog.emails.send(
+    to='jane@example.com',
+    distinct_id=user.id,
+    template_key='order-receipt',
+    subject='Your Hedgebox receipt',
+    html=receipt_html,
+    bcc='records@example.com',
+    headers={'X-Entity-Ref-ID': 'order-123'},
+    tags=[{'name': 'category', 'value': 'receipt'}],
+    attachments=[{'filename': 'receipt.pdf', 'content': receipt_pdf, 'content_type': 'application/pdf'}],
+)
+```
+
+</MultiLanguage>
+
+| Node.js | Python | Description |
+| --- | --- | --- |
+| `cc` | `cc` | One address, or a list of up to 10, that get a visible copy. Use bare addresses, such as `jane@example.com`, without a display name. |
+| `bcc` | `bcc` | One address, or a list of up to 10, that get a hidden copy. The other recipients never see them. |
+| `headers` | `headers` | Up to 10 custom headers, such as `{ "X-Entity-Ref-ID": "order-123" }`. |
+| `tags` | `tags` | Up to 10 `{ name, value }` pairs. PostHog adds them to the email's [engagement events](#engagement-capture) as `$email_tags`. |
+| `attachments` | `attachments` | Up to 10 files, with at most 512 KB in total after decoding. Each file is `{ filename, content, contentType?, contentId? }` (`content_type` and `content_id` in Python). `content` is a `Buffer` or a Base64 string in Node.js, and `bytes` in Python. |
+
+- **Headers.** PostHog sets some headers itself and refuses them in `headers`: `From`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `MIME-Version`, `Sender`, `Return-Path`, `Auto-Submitted`, and any `Content-*`, `X-PostHog-*`, or `X-SES-*` header. A header name has no spaces or colons, and a value is printable ASCII on one line. Header names ignore case, so set each name once.
+- **Tags.** A tag name and a value use only ASCII letters, numbers, `_`, and `-`. Names that start with `ph_` are PostHog's. Each name can appear once.
+- **Attachments.** Mailbox providers block some file types, such as `.exe`, and PostHog refuses them. A file name has no path and no line breaks. To show a file inline, give it a `contentId` (`content_id`), such as `logo`, and reference it in the HTML as `<img src="cid:logo">`. Send a link instead of a larger file.
+- **Suppressed addresses.** When the `to` address, a `cc`, or a `bcc` address is suppressed, PostHog sends nothing and answers [`recipient_suppressed`](#recipient_suppressed). Every address counts as a recipient for the project's sending limits.
+
+A template made in PostHog sends with its own settings, so a send by `template_id` takes none of these fields. A field that breaks a rule fails with [`invalid_request`](#invalid_request), and `field` names it, such as `tags__0__name`.
 
 ## Always pass `distinct_id`
 
@@ -282,9 +334,13 @@ What PostHog does with a key that it saw before:
 | --- | --- |
 | is the same as the first, and the first was queued | The first `202`, with the same message ID. Nothing new is sent, and PostHog runs no checks again. Python's result has `replayed` set. |
 | is the same as the first, and the first is still in progress | `409` with the name `concurrent_idempotent_requests`. See [`idempotency_key_in_flight`](#idempotency_key_in_flight). The SDKs retry it. |
-| differs from the first, or goes to the other send route | `422` [`invalid_idempotent_request`](#invalid_idempotent_request). Nothing is sent. |
+| differs from the first, or goes to the other send route | `422` [`idempotency_key_reused`](#idempotency_key_reused), with the name `invalid_idempotent_request`. Nothing is sent. |
 
-A request counts as the same when it names the same template (`template_id` or `template_key`), recipient, distinct ID, `template_data`, and content.
+A request counts as the same when it names the same template (`template_id` or `template_key`), recipient, distinct ID, `template_data`, and content, with the same sender, copies, headers, tags, and attachments. A send that names no `from` stays the same when the project's default sender changes.
+
+Template sends and code sends share one set of keys, so a key names one email across both send routes.
+
+A replay answers before the checks run, so a retry still gets its `202` when the email's workflow was paused after the first send, or when the default sender changed. A retry can still fail when the template is deleted (`404`), when a local template's content changed (`409` [`template_outdated`](#template_outdated)), or when the project no longer has a default sender (`400` [`sender_not_verified`](#sender_not_verified)).
 
 ### What the SDKs retry
 
@@ -368,18 +424,68 @@ The `name` follows the status and the code:
 
 | Status | `code` | `name` | Retried |
 | --- | --- | --- | --- |
-| `400` | A field or a send check, such as [`sender_not_verified`](#sender_not_verified) | `validation_error` | No |
+| `400` | A field, such as [`invalid_request`](#invalid_request), or a send check: [`invalid_recipient`](#invalid_recipient), [`sender_not_verified`](#sender_not_verified), [`sender_not_allowed`](#sender_not_allowed), [`sending_suspended`](#sending_suspended), [`template_paused`](#template_paused), [`transactional_email_paused`](#transactional_email_paused), or [`recipient_suppressed`](#recipient_suppressed). The SDK's local checks, such as [`invalid_form`](#invalid_form), have this name too | `validation_error` | No |
 | `401` | [`authentication_failed`](#authentication_failed), and the SDK's [`missing_secret_key`](#missing_secret_key) | `missing_api_key` | No |
 | `403` | [`permission_denied`](#permission_denied) | `invalid_permission` | No |
 | `404` | [`template_not_found`](#template_not_found), [`not_found`](#not_found) | `not_found` | No |
 | `409` | [`template_outdated`](#template_outdated) | `validation_error` | The SDK uploads, then sends once more |
 | `409` | [`idempotency_key_in_flight`](#idempotency_key_in_flight) | `concurrent_idempotent_requests` | Yes |
 | `409` | [`template_edited_in_posthog`](#template_edited_in_posthog) | `validation_error` | No |
-| `422` | [`invalid_idempotent_request`](#invalid_idempotent_request) | `invalid_idempotent_request` | No |
+| `422` | [`idempotency_key_reused`](#idempotency_key_reused) | `invalid_idempotent_request` | No |
 | `429` | [`throttled`](#throttled) | `rate_limit_exceeded` | Yes |
 | `429` | [`quota_limited`](#quota_limited) | `monthly_quota_exceeded` | No |
-| `503` | [`delivery_unavailable`](#delivery_unavailable) | `service_unavailable` | Yes |
+| `503` | [`delivery_unavailable`](#delivery_unavailable), and the SDK's [`network_error`](#network_error) | `service_unavailable` | Yes |
 | `5xx` | Anything else, and the SDK's [`api_error`](#api_error) and [`unexpected_error`](#unexpected_error) | `application_error` | No |
+
+## Read an email's status
+
+A `202` means PostHog queued the email. To see where it is later, read its status by the ID that the send returned. The key needs the `hog_flow:read` scope, and `hog_flow:write` covers it.
+
+<MultiLanguage>
+
+```js
+const { data, error } = await posthog.emails.get(sent.id)
+
+if (data?.status === 'bounced') {
+    console.log(`Bounced: ${data.reason}`)
+}
+```
+
+```bash
+curl "<ph_app_host>/api/projects/@current/messaging/emails/01a146ff-a14e-0000-81c0-f2ccc2444f5f/" \
+  -H "Authorization: Bearer $POSTHOG_PROJECT_SECRET_API_KEY"
+```
+
+</MultiLanguage>
+
+The response is `200`:
+
+```json
+{
+  "id": "01a146ff-a14e-0000-81c0-f2ccc2444f5f",
+  "status": "delivered",
+  "created_at": "2026-10-23T09:12:04Z",
+  "status_at": "2026-10-23T09:12:07Z"
+}
+```
+
+- `status` moves forward in this order, and never back: `queued`, `waiting`, `unknown`, `skipped`, `failed`, `sent`, `delivered`, `bounced`, `complained`. A late `sent` never replaces `delivered`. It isn't Resend's `last_event`.
+- `reason` is there for `skipped`, `failed`, `bounced`, and `complained`, such as `recipient_suppressed`, `provider_error`, or `hard`.
+- `created_at` is when PostHog accepted the send, and `status_at` is when the email reached its status. In Node.js, they are `createdAt` and `statusAt`.
+
+PostHog keeps a status for 30 days. A new email can take a few seconds to show up, and until then the read answers `404` [`not_found`](#not_found). The read never retries, so read again later for a newer status. It shares the [rate limits](#rate-limits) of the send. posthog-python has no read yet, so call the route from Python.
+
+### Find the emails sent to an address
+
+`GET /api/projects/@current/messaging/emails/?to=jane@example.com`
+
+The same read, by recipient: the statuses of the recent emails sent to one address, newest first, in pages. Each item has the fields of the read by ID. The key needs `hog_flow:read`, and the read shares the send's rate limits.
+
+```bash
+curl -G "<ph_app_host>/api/projects/@current/messaging/emails/" \
+  --data-urlencode "to=jane@example.com" \
+  -H "Authorization: Bearer $POSTHOG_PROJECT_SECRET_API_KEY"
+```
 
 ## Send over HTTP
 
@@ -447,10 +553,16 @@ curl -X POST "<ph_app_host>/api/projects/@current/messaging/send/email/" \
 | `subject`, `html`, `text` | `subject`, `html`, `text` | The rendered content. Without `text`, PostHog derives it from `html`. |
 | `from` | `from` | The sender, on a domain that the project verified. Not with `template.id`. |
 | `reply_to` | `reply_to` | A list of up to 10 addresses. Not with `template.id`. |
+| `cc`, `bcc` | `cc`, `bcc` | Lists of up to 10 bare addresses each. Not with `template.id`. |
+| `headers` | `headers` | An object of up to 10 header names and values. Not with `template.id`. |
+| `tags` | `tags` | A list of up to 10 `{ "name", "value" }` objects. Not with `template.id`. |
+| `attachments` | `attachments` | A list of up to 10 `{ "filename", "content", "content_type", "content_id" }` objects, with `content` in Base64. At most 512 KB in total after decoding. Not with `template.id`. |
 | `capture_engagement` | `capture_engagement` | Whether PostHog captures the email's [engagement events](#engagement-capture). Leave it out for the default. |
 | `idempotency_key` | `Idempotency-Key` header | The send's [idempotency key](#idempotency). Send one on every request. |
 
-A request names exactly one of `template` and `template_key`.
+A request names exactly one of `template` and `template_key`. The rules for each field are in [add copies, headers, tags, and attachments](#add-copies-headers-tags-and-attachments).
+
+PostHog refuses a field that the route doesn't take with `400` [`invalid_request`](#invalid_request), and `attr` names the field. A newer SDK against an older PostHog then fails, instead of sending the email without part of the request.
 
 The response is `202`:
 
@@ -719,7 +831,19 @@ The key has a character other than a letter, a digit, a hyphen (`-`), or an unde
 
 `400` on the upload, the send, adoption, and a change request.
 
-A field is missing or has the wrong type. `attr` names the field, and `detail` starts with it, for example `subject: This field is required.` On the send, the API says why: "A send needs a template, a recipient address, and data as an object." A send names exactly one of `template` and `template_key`, `hash` only goes with `key`, and rendered content needs a `subject` and `html` or `text`, and takes no `message_data`. `from` and `reply_to` don't go with `template.id`. On adoption, `key` must be the only field of the `PATCH`. On a change request, `instruction` has at most 2,000 characters.
+A field is missing, has the wrong type, or breaks a rule. `attr` names the field, and `detail` starts with it, for example `subject: This field is required.` On the send, the API says why: "A send needs a template, a recipient address, and data as an object." A send names exactly one of `template` and `template_key`, `hash` only goes with `key`, and rendered content needs a `subject` and `html` or `text`, and takes no `message_data`. `from`, `reply_to`, `cc`, `bcc`, `headers`, `tags`, and `attachments` don't go with `template.id`. On adoption, `key` must be the only field of the `PATCH`. On a change request, `instruction` has at most 2,000 characters.
+
+**A field the route doesn't take.** The send refuses a field that it doesn't know, such as a field from a newer SDK, and names it in `attr`. The API says: "PostHog doesn't take this field on this route." It says why, for example: "PostHog refuses a field it doesn't know, such as `cc` from a newer SDK, so it never sends the email without part of what you asked for." Update PostHog, or leave the field out.
+
+**Copies, headers, tags, and attachments.** `attr` names the entry, such as `cc__0`, `headers`, `tags__0__name`, or `attachments__0__filename`. The API says, for example:
+
+- "`"jane"@example.com` is not a bare address. Send it as `jane@example.com`." for a `cc` or `bcc` entry in quotes. An entry with a display name, such as `Jane <jane@example.com>`, answers "Enter a valid email address."
+- "PostHog sets `Reply-To` itself. Use the send's own fields, such as `from`, `cc` or `subject`, instead."
+- "Use only ASCII letters, numbers, `_` and `-`." for a tag.
+- "Mailbox providers block `.exe` files. Send a link to the file instead."
+- "Attachments can hold 512KB in total. Send a link to larger files."
+
+See [add copies, headers, tags, and attachments](#add-copies-headers-tags-and-attachments) for every rule.
 
 **Fix:** Fix the field that `attr` names, then send the request again. The API says: "Fix `subject` and upload again.", "Fix `template` and send again.", or "Fix `instruction` and request the change again."
 
@@ -792,11 +916,13 @@ PostHog doesn't hold the template's content, so it queued nothing:
 
 ### `not_found`
 
-`404` on the upload route, the send routes, and the change request route.
+`404` on the upload route, the send routes, the status read, and the change request route.
 
 The transactional email API isn't enabled for this project, or the template ID in the path doesn't exist. Adoption and release don't check the beta flag, so a successful adoption doesn't mean the API is enabled. The API says: "Not found."
 
 **Fix:** The API is in beta. [Ask us in-app](https://app.posthog.com/#panel=support%3Afeedback%3A%3Alow%3Atrue) to enable it for your project. Don't retry until it's enabled. If it's already enabled, check the project and the template ID.
+
+On a [status read](#read-an-emails-status), no email in this project has the ID, the email is older than 30 days, or it was sent a few seconds ago. The API says, for example: "No email in this project has the id `01a146ff-a14e-0000-81c0-f2ccc2444f5f`." It says why: "PostHog keeps an email's status for 30 days. A new email can take a few seconds to show up." **Fix:** The API says: "Check the `message_id` the send answered and the project, or read again in a few seconds."
 
 ### `authentication_failed`
 
@@ -813,7 +939,7 @@ PostHog doesn't accept the key. For example, the key is wrong, deleted, or rolle
 The key can't do this. For example:
 
 - "API key missing required scope 'hog_flow:write'": give the key the `hog_flow:write` scope. A [change request](#run-with-posthog-code) needs `hog_flow:read` and `task:write` instead, and names the first one the key lacks, such as "API key missing required scope 'task:write'".
-- "This action does not support project secret API key access": a project secret API key can only upload and send. Use a personal API key for other template routes, such as [adoption](#adopt-a-template-made-in-posthog) and a [change request](#run-with-posthog-code).
+- "This action does not support project secret API key access": a project secret API key can only upload, send, and read an email's status. Use a personal API key for other template routes, such as [adoption](#adopt-a-template-made-in-posthog) and a [change request](#run-with-posthog-code).
 - "You need editor access to this template's transactional email workflow.": a personal API key or a session needs editor access to the template's workflow.
 - "You need editor access to workflows to upload a new template.": a personal API key or a session needs editor access to Workflows to create a template.
 - "You need editor access to workflows to make a template transactional.": a personal API key or a session needs editor access to Workflows to make a template transactional.
@@ -842,9 +968,9 @@ The template has no workflow to send it, for example a template made in PostHog 
 
 `400` on the send.
 
-The template's workflow is paused or deleted.
+The email's workflow is paused or deleted. PostHog checks this after it looks up the idempotency key, so a retry of a send that PostHog already queued still gets its `202`. See [idempotency](#idempotency).
 
-- "The template's transactional email isn't active.": the workflow is paused. **Fix:** Turn the template's workflow back on in Workflows. An upload never turns a paused workflow back on.
+- "The email's workflow isn't an active transactional email.": the workflow is paused. The API says why: "PostHog sends a transactional email only while its workflow is active." **Fix:** The API says: "Turn the email's workflow back on, then send again." An upload never turns a paused workflow back on.
 - "The template's transactional email no longer exists.": the workflow was deleted. **Fix:** Upload the template again. The upload creates a new workflow with the project's default sender. For a template without a key, call `POST /api/projects/:project_id/messaging_templates/:id/make_transactional/` with a personal API key that has `hog_flow:write` and editor access to Workflows.
 
 ### `invalid_recipient`
@@ -875,9 +1001,9 @@ PostHog's email pipeline or its idempotency store is down, so PostHog queued not
 
 `400` on a send. Nothing was sent.
 
-PostHog can't send from the sender. The API says why: "PostHog only sends from a domain the project verified, so mailbox providers trust the email." It says, for example: "No verified sender in this project can send from `security@example.com`.", or "The project has no verified default email sender."
+PostHog has no sender it can send from. For a send without `from`, the API says: "The project has no verified default email sender." It says why: "The send names no `from`, and the project has no verified default sender to send from."
 
-**Fix:** The API says: "Send from an address on a verified domain, or verify the domain in the email channel settings first." See [set up the email channel](/docs/workflows/configure-channels).
+**Fix:** The API says: "Pass `from` with an address on a verified domain, or set a default sender in the email channel settings." See [set up the email channel](/docs/workflows/configure-channels). A `from` that no verified sender can send from answers [`sender_not_allowed`](#sender_not_allowed) instead.
 
 When the sender of a template made in PostHog stops working, the `why` and the `fix` name the reason:
 
@@ -892,15 +1018,15 @@ When the sender of a template made in PostHog stops working, the `why` and the `
 
 `400` on a send. Nothing was sent.
 
-A send check refused the sender in `from`. `why` says which rule refused it.
+No verified sender of the project can send from the address in `from`, and `attr` is `from`. The API says, for example: "No verified sender in this project can send from `security@example.com`." It says why: "PostHog only sends from a domain the project verified, so mailbox providers trust the email."
 
-**Fix:** Follow the `fix` of the error, or send from the project's default sender by leaving out `from`.
+**Fix:** The API says: "Send from an address on a verified domain, or verify the domain in the email channel settings first." Or leave out `from` to send from the project's default sender. See [set up the email channel](/docs/workflows/configure-channels).
 
 ### `recipient_suppressed`
 
 `400` on a send. Nothing was sent.
 
-An earlier email to the address bounced, or the recipient marked it as spam, so PostHog no longer sends to it. The API says why, for example: "An earlier email to jane@example.com bounced or was marked as spam, so PostHog no longer sends to it."
+An earlier email to the address bounced, or the recipient marked it as spam, so PostHog no longer sends to it. This covers every recipient: when the `to` address, a `cc`, or a `bcc` address is suppressed, PostHog sends nothing. The API says why, for example: "An earlier email to jane@example.com bounced or was marked as spam, so PostHog no longer sends to it."
 
 **Fix:** The API says: "Send to another address, or remove the address from the suppression list once it can receive email again."
 
@@ -944,21 +1070,17 @@ A request with the same idempotency key is still in progress. The API says: "A r
 
 **Fix:** Send again with the same key in a few seconds. The SDKs retry this on their own. When the first request queued the email, the retry gets its `202` and sends nothing new.
 
-### `invalid_idempotent_request`
+### `idempotency_key_reused`
 
-`422` on a send. Nothing was sent.
+`422` on both send routes. Nothing was sent. The SDKs report it with the name `invalid_idempotent_request`.
 
-The idempotency key was used before with another request, or on the other send route. A key names one email, so PostHog doesn't send a different email under it.
+The idempotency key was used before with another request, or on the other send route. A key names one email, so PostHog doesn't send a different email under it. The API says: "This Idempotency-Key was already used for a different request. Use a new key for a new email."
 
 **Fix:** Use a new key for a new email. When you derive the key from the email's purpose, such as `welcome:user_123`, put everything that makes the email different into the key. See [idempotency](#idempotency).
 
-### `idempotency_key_reused`
+### `invalid_idempotent_request`
 
-`422` on a send by [template ID in the path](#send-by-template-id-in-the-path). The SDKs report it with the name `invalid_idempotent_request`.
-
-The same case as [`invalid_idempotent_request`](#invalid_idempotent_request). The API says: "This Idempotency-Key was already used for a different request. Use a new key for a new email."
-
-**Fix:** Use a new key for a new email.
+The SDKs' `name` for [`idempotency_key_reused`](#idempotency_key_reused), from Resend's error names. PostHog answers the code `idempotency_key_reused`.
 
 ### `invalid_idempotency_key`
 
@@ -1089,7 +1211,7 @@ The client is disabled, so nothing was sent. **Fix:** Turn off the client's `dis
 
 #### `network_error`
 
-The request didn't reach PostHog, or no answer came back. The email may or may not be queued. The SDKs retry with the same idempotency key, so a retry doesn't send a second email. **Fix:** Check the network and the `host` or app host option.
+The request didn't reach PostHog, or no answer came back. The email may or may not be queued. The SDKs report it with the name `service_unavailable`, and retry with the same idempotency key, so a retry doesn't send a second email. **Fix:** Check the network and the `host` or app host option.
 
 #### `api_error`
 
@@ -1098,3 +1220,21 @@ PostHog answered with an error that has no `code`, or with a body that the SDK c
 #### `unexpected_error`
 
 The call failed in an unexpected way. The SDKs report it with the name `application_error`. **Fix:** Check the message of the error. If it continues, [contact us in-app](https://app.posthog.com/#panel=support%3Afeedback%3A%3Alow%3Atrue).
+
+Before any request, posthog-node checks the form of the call, the IDs, the keys, the attachments, and the idempotency key. It checks only the types: PostHog checks the limits. A failed check sends nothing and has the name `validation_error`. Its code is [`invalid_template_key`](#invalid_template_key), [`invalid_idempotency_key`](#invalid_idempotency_key), or one of the codes below. posthog-python raises a `TypeError` or a `ValueError` for these cases instead.
+
+#### `invalid_form`
+
+The call passes both `templateId` and `templateKey`, or neither. The SDK says: "Send either templateId, or templateKey with subject and html or text." **Fix:** Pass `templateId` for a template made in PostHog, or `templateKey` with the content. See [how it works](#how-it-works).
+
+#### `invalid_template_id`
+
+The template ID isn't a UUID. The SDK says: "templateId must be the UUID of a template." **Fix:** Copy the ID from the template's **API** tab in Workflows.
+
+#### `invalid_attachment`
+
+`attachments` isn't a list, a file has no `content` as a `Buffer`, a `Uint8Array`, or a Base64 string, or a file has a `path`. PostHog doesn't fetch files: "PostHog can't fetch an attachment from a path or URL. Read the file and pass its content instead." **Fix:** Read the file in your code and pass its content.
+
+#### `invalid_message_id`
+
+The ID passed to `posthog.emails.get` is empty or isn't a string. The SDK says: "id must be the id that send returned." **Fix:** Pass the `id` that the send returned.
