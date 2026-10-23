@@ -340,7 +340,7 @@ A request counts as the same when it names the same template (`template_id` or `
 
 Template sends and code sends share one set of keys, so a key names one email across both send routes.
 
-A replay answers before the checks run, so a retry still gets its `202` when the email's workflow was paused after the first send, or when the default sender changed. A retry can still fail when the template is deleted (`404`), when a local template's content changed (`409` [`template_outdated`](#template_outdated)), or when the project no longer has a default sender (`400` [`sender_not_verified`](#sender_not_verified)).
+A replay answers before the checks run, so a retry still gets its `202` when the email's workflow was paused after the first send, or when the default sender changed. A retry can still fail when the template is deleted (`404`), when the email's workflow is deleted (`400` [`transactional_email_paused`](#transactional_email_paused)), when a local template's content changed (`409` [`template_outdated`](#template_outdated)), or when the project no longer has a default sender (`400` [`sender_not_verified`](#sender_not_verified)).
 
 ### What the SDKs retry
 
@@ -470,7 +470,7 @@ The response is `200`:
 ```
 
 - `status` moves forward in this order, and never back: `queued`, `waiting`, `unknown`, `skipped`, `failed`, `sent`, `delivered`, `bounced`, `complained`. A late `sent` never replaces `delivered`. It isn't Resend's `last_event`.
-- `reason` is there for `skipped`, `failed`, `bounced`, and `complained`, such as `recipient_suppressed`, `provider_error`, or `hard`.
+- `reason` is optional. When PostHog knows it, it says why an email is `skipped`, `failed`, `bounced`, or `complained`, such as `recipient_suppressed`, `provider_error`, or `hard`.
 - `created_at` is when PostHog accepted the send, and `status_at` is when the email reached its status. In Node.js, they are `createdAt` and `statusAt`.
 
 PostHog keeps a status for 30 days. A new email can take a few seconds to show up, and until then the read answers `404` [`not_found`](#not_found). The read never retries, so read again later for a newer status. It shares the [rate limits](#rate-limits) of the send. posthog-python has no read yet, so call the route from Python.
@@ -968,7 +968,7 @@ The template has no workflow to send it, for example a template made in PostHog 
 
 `400` on the send.
 
-The email's workflow is paused or deleted. PostHog checks this after it looks up the idempotency key, so a retry of a send that PostHog already queued still gets its `202`. See [idempotency](#idempotency).
+The email's workflow is paused or deleted. PostHog checks whether an existing workflow is active after it looks up the idempotency key, so a retry of a send that PostHog already queued still gets its `202` after a pause. A deleted workflow answers this error before the key lookup, so a retry gets it too. See [idempotency](#idempotency).
 
 - "The email's workflow isn't an active transactional email.": the workflow is paused. The API says why: "PostHog sends a transactional email only while its workflow is active." **Fix:** The API says: "Turn the email's workflow back on, then send again." An upload never turns a paused workflow back on.
 - "The template's transactional email no longer exists.": the workflow was deleted. **Fix:** Upload the template again. The upload creates a new workflow with the project's default sender. For a template without a key, call `POST /api/projects/:project_id/messaging_templates/:id/make_transactional/` with a personal API key that has `hog_flow:write` and editor access to Workflows.
