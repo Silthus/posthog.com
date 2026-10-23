@@ -340,7 +340,7 @@ A request counts as the same when it names the same template (`template_id` or `
 
 Template sends and code sends share one set of keys, so a key names one email across both send routes.
 
-A replay answers before the checks run, so a retry still gets its `202` when the email's workflow was paused after the first send, or when the default sender changed. A retry can still fail when the template is deleted (`404`), when the email's workflow is deleted (`400` [`transactional_email_paused`](#transactional_email_paused)), when a local template's content changed (`409` [`template_outdated`](#template_outdated)), or when the project no longer has a default sender (`400` [`sender_not_verified`](#sender_not_verified)).
+A replay answers before the checks run, so a retry still gets its `202` when the email's workflow was paused after the first send, or when the default sender changed. A retry can still fail when the template is deleted (`404`), when the workflow of a template made in PostHog or a local template is deleted (`400` [`transactional_email_paused`](#transactional_email_paused)), when the workflow of rendered content is deleted (`422` [`idempotency_key_reused`](#idempotency_key_reused), because PostHog makes a new workflow for its key), when a local template's content changed (`409` [`template_outdated`](#template_outdated)), or when the project no longer has a default sender (`400` [`sender_not_verified`](#sender_not_verified)).
 
 ### What the SDKs retry
 
@@ -968,7 +968,7 @@ The template has no workflow to send it, for example a template made in PostHog 
 
 `400` on the send.
 
-The email's workflow is paused or deleted. PostHog checks whether an existing workflow is active after it looks up the idempotency key, so a retry of a send that PostHog already queued still gets its `202` after a pause. A deleted workflow answers this error before the key lookup, so a retry gets it too. See [idempotency](#idempotency).
+The email's workflow is paused or deleted. PostHog checks whether an existing workflow is active after it looks up the idempotency key, so a retry of a send that PostHog already queued still gets its `202` after a pause. When the workflow of a template made in PostHog or a local template is deleted, this error comes before the key lookup, so a retry gets it too. Rendered content gets no such error: its next send makes a new workflow for its key and goes out, and a retry of a send from before the deletion answers [`idempotency_key_reused`](#idempotency_key_reused). See [idempotency](#idempotency).
 
 - "The email's workflow isn't an active transactional email.": the workflow is paused. The API says why: "PostHog sends a transactional email only while its workflow is active." **Fix:** The API says: "Turn the email's workflow back on, then send again." An upload never turns a paused workflow back on.
 - "The template's transactional email no longer exists.": the workflow was deleted. **Fix:** Upload the template again. The upload creates a new workflow with the project's default sender. For a template without a key, call `POST /api/projects/:project_id/messaging_templates/:id/make_transactional/` with a personal API key that has `hog_flow:write` and editor access to Workflows.
@@ -1074,7 +1074,7 @@ A request with the same idempotency key is still in progress. The API says: "A r
 
 `422` on both send routes. Nothing was sent. The SDKs report it with the name `invalid_idempotent_request`.
 
-The idempotency key was used before with another request, or on the other send route. A key names one email, so PostHog doesn't send a different email under it. The API says: "This Idempotency-Key was already used for a different request. Use a new key for a new email."
+The idempotency key was used before with another request, or on the other send route. A retry of rendered content after its workflow was deleted also gets this error, because the retry goes to the new workflow. A key names one email, so PostHog doesn't send a different email under it. The API says: "This Idempotency-Key was already used for a different request. Use a new key for a new email."
 
 **Fix:** Use a new key for a new email. When you derive the key from the email's purpose, such as `welcome:user_123`, put everything that makes the email different into the key. See [idempotency](#idempotency).
 
